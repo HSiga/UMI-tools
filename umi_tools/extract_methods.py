@@ -43,7 +43,7 @@ def addBarcodesToIdentifier(read, UMI, cell, umi_separator):
 
 def addOrientationToIdentifier(read, orientation_tag, separator):
     read_id = read.identifier.split(" ")
-    read_id[0] = read_id[0] + separator + orientation_tag
+    read_id.append("dir=%s" % orientation_tag)
     return " ".join(read_id)
 
 

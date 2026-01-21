@@ -8,16 +8,19 @@ import umi_tools.Utilities as U
 from umi_tools.umi_methods import RANGES
 
 
-def addBarcodesToIdentifier(read, UMI, cell, umi_separator):
+def addBarcodesToIdentifier(read, UMI, cell, umi_separator, cell_separator=None):
     '''extract the identifier from a read and append the UMI and
     cell barcode before the first space'''
 
     read_id = read.identifier.split(" ")
 
+    if cell_separator is None:
+        cell_separator = umi_separator
+
     if cell == "":
         read_id[0] = read_id[0] + umi_separator + UMI
     else:
-        read_id[0] = read_id[0] + umi_separator + cell + umi_separator + UMI
+        read_id[0] = read_id[0] + cell_separator + cell + umi_separator + UMI
 
     identifier = " ".join(read_id)
 
@@ -499,7 +502,8 @@ class ExtractFilterAndUpdate:
                     raise ValueError("barcode pattern (%s) should only contain "
                                      "N/X/C characters" % pattern)
                 self.pattern_length = len(pattern)
-                self.umi_bases = [x for x in range(len(pattern)) if pattern[x] == "N"]
+                 umi_separator="_",
+                 cell_separator=None):
                 self.bc_bases = [x for x in range(len(pattern)) if pattern[x] == "X"]
                 self.cell_bases = [x for x in range(len(pattern)) if pattern[x] == "C"]
 
@@ -513,6 +517,7 @@ class ExtractFilterAndUpdate:
                 self.bc_bases2 = [x for x in range(len(pattern2))
                                   if pattern2[x] == "X"]
                 self.cell_bases2 = [x for x in range(len(pattern2))
+        self.cell_separator = cell_separator
                                     if pattern2[x] == "C"]
 
             self.getCellBarcode = self._getCellBarcodeString
@@ -566,8 +571,10 @@ class ExtractFilterAndUpdate:
             if cell is None:
                 return None
 
-        if self.umi_separator:
-            umi_separator = self.umi_separator
+        umi_separator = self.umi_separator
+        cell_separator = self.cell_separator
+        if cell_separator is None:
+            cell_separator = umi_separator
 
         self.read_counts['Reads output'] += 1
 
@@ -575,11 +582,11 @@ class ExtractFilterAndUpdate:
         # which read(s) it was on
         if self.either_read:
             new_identifier = addBarcodesToIdentifier(
-                read1, umi, cell, umi_separator)
+                read1, umi, cell, umi_separator, cell_separator)
             read1.identifier = new_identifier
 
             new_identifier2 = addBarcodesToIdentifier(
-                read2, umi, cell, umi_separator)
+                read2, umi, cell, umi_separator, cell_separator)
             read2.identifier = new_identifier
 
             # UMI was on read 1
@@ -595,7 +602,7 @@ class ExtractFilterAndUpdate:
         # Otherwise, use input from user to identiy which reads need updating
         else:
             new_identifier = addBarcodesToIdentifier(
-                read1, umi, cell, umi_separator)
+                read1, umi, cell, umi_separator, cell_separator)
             read1.identifier = new_identifier
             if self.pattern:  # seq and quals need to be updated
                 read1.seq = new_seq
@@ -603,7 +610,7 @@ class ExtractFilterAndUpdate:
 
             if read2:
                 new_identifier2 = addBarcodesToIdentifier(
-                    read2, umi, cell, umi_separator)
+                    read2, umi, cell, umi_separator, cell_separator)
                 read2.identifier = new_identifier2
                 if self.pattern2:   # seq and quals need to be updated
                     read2.seq = new_seq2

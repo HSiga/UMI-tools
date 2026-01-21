@@ -710,6 +710,11 @@ def Start(parser=None,
         group.add_option("--ignore-read-pair-suffixes",
                          dest="ignore_suffix", action="store_true",
                          help="Ignore '\\1' and '\\2' read name suffixes")
+        group.add_option("--revcomp",
+                         dest="revcomp", action="store_true",
+                         help=("If regex does not match, try the reverse-"
+                               "complemented read and tag output reads with "
+                               "F or RC"))
         parser.add_option_group(group)
 
     if add_sam_options:
@@ -1153,6 +1158,9 @@ def validateExtractOptions(options):
 
     if options.filtered_out2 and not options.read2_in:
         raise ValueError("Cannot use --filtered-out2 without read2 input (--read2-in)")
+
+    if options.revcomp and options.extract_method != "regex":
+        raise ValueError("--revcomp requires --extract-method=regex")
 
     if ((options.read2_in and options.filtered_out) and not options.filtered_out2) or (
             options.filtered_out2 and not options.filtered_out):

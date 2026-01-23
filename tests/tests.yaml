@@ -22,6 +22,12 @@ extract_quality:
       references: [extract_quality.fastq]
       options: extract  --extract-method=regex --bc-pattern="^(?P<umi_1>.{3}).{4}(?P<umi_2>.{2})" --quality-filter-threshold=30 --quality-encoding=phred33 --log=test.log
 
+extract_revcomp:
+      stdin: slim.fastq.gz
+      outputs: [stdout]
+      references: [extract_revcomp.fastq]
+      options: extract --extract-method=regex --bc-pattern="^(?P<umi_1>GAGGT)" --revcomp -L test.log
+
 extract_scrb_seq:
       stdin: scrb_seq_fastq.1.gz
       outputs: [stdout]

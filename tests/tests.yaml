@@ -46,6 +46,12 @@ extract_indrop_fuzzy:
       references: [indrop_extract_fuzzy.fastq]
       options: extract --extract-method=regex --read2-in=<DIR>/indrop.fastq.2.gz --bc-pattern="(?P<cell_1>.{8,12})(?P<discard_2>GAGTGATTGCTTGTGACGCCTT{s<=2})(?P<cell_3>.{8})(?P<umi_1>.{6})T{3}.*" -L test.log --read2-stdout --error-correct-cell --whitelist=<DIR>/indrop_fuzzy_whitelist.tsv
 
+extract_indrop_fuzzy_cellsep:
+      stdin: indrop.fastq.1.gz
+      outputs: [stdout]
+      references: [indrop_extract_fuzzy_umisep_cellsep.fastq]
+      options: 'extract --extract-method=regex --read2-in=<DIR>/indrop.fastq.2.gz --bc-pattern="(?P<cell_1>.{8,12})(?P<discard_2>GAGTGATTGCTTGTGACGCCTT{s<=2})(?P<cell_3>.{8})(?P<umi_1>.{6})T{3}.*" -L test.log --read2-stdout --error-correct-cell --whitelist=<DIR>/indrop_fuzzy_whitelist.tsv --cell-separator="_cell_" --umi-separator="_umi_"'
+
 
 extract_indrop_blacklist:
       stdin: indrop.fastq.1.gz

@@ -184,6 +184,11 @@ cigar 2S98M will be assumed to start at position 498.
       Separator between read id and UMI. See ``--extract-umi-method``
       above. Default=``_``
 
+"""""""""""""""""""""""""""
+``--cell-separator=[SEPARATOR]``
+"""""""""""""""""""""""""""
+      Separator between read id and cell barcode. If not supplied,
+      uses ``--umi-separator``.
 """""""""""""""""""
 ``--umi-tag=[TAG]``
 """""""""""""""""""

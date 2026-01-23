@@ -8,16 +8,19 @@ import umi_tools.Utilities as U
 from umi_tools.umi_methods import RANGES
 
 
-def addBarcodesToIdentifier(read, UMI, cell, umi_separator):
+def addBarcodesToIdentifier(read, UMI, cell, umi_separator, cell_separator=None):
     '''extract the identifier from a read and append the UMI and
     cell barcode before the first space'''
 
     read_id = read.identifier.split(" ")
 
+    if cell_separator is None:
+        cell_separator = umi_separator
+
     if cell == "":
         read_id[0] = read_id[0] + umi_separator + UMI
     else:
-        read_id[0] = read_id[0] + umi_separator + cell + umi_separator + UMI
+        read_id[0] = read_id[0] + cell_separator + cell + umi_separator + UMI
 
     identifier = " ".join(read_id)
 
@@ -459,7 +462,8 @@ class ExtractFilterAndUpdate:
                  retain_umi=False,
                  either_read=False,
                  either_read_resolve="discard",
-                 umi_separator="_"):
+                 umi_separator="_",
+                 cell_separator=None):
 
         self.method = method
         self.read_counts = collections.Counter()
@@ -479,6 +483,7 @@ class ExtractFilterAndUpdate:
         self.umi_false_to_true_map = None  # These will be updated if required
         self.umi_whitelist_counts = None  # These will be updated if required
         self.umi_separator = umi_separator
+        self.cell_separator = cell_separator
 
         self.cell_whitelist = None  # These will be updated if required
         self.false_to_true_map = None  # These will be updated if required
@@ -569,17 +574,23 @@ class ExtractFilterAndUpdate:
         if self.umi_separator:
             umi_separator = self.umi_separator
 
+        if self.cell_separator:
+            cell_separator = self.cell_separator
+        
+        if cell_separator is None:
+            cell_separator = umi_separator
+
         self.read_counts['Reads output'] += 1
 
         # if UMI could be on either read, use umi_values to identify
         # which read(s) it was on
         if self.either_read:
             new_identifier = addBarcodesToIdentifier(
-                read1, umi, cell, umi_separator)
+                read1, umi, cell, umi_separator, cell_separator)
             read1.identifier = new_identifier
 
             new_identifier2 = addBarcodesToIdentifier(
-                read2, umi, cell, umi_separator)
+                read2, umi, cell, umi_separator, cell_separator)
             read2.identifier = new_identifier
 
             # UMI was on read 1
@@ -595,7 +606,7 @@ class ExtractFilterAndUpdate:
         # Otherwise, use input from user to identiy which reads need updating
         else:
             new_identifier = addBarcodesToIdentifier(
-                read1, umi, cell, umi_separator)
+                read1, umi, cell, umi_separator, cell_separator)
             read1.identifier = new_identifier
             if self.pattern:  # seq and quals need to be updated
                 read1.seq = new_seq
@@ -603,7 +614,7 @@ class ExtractFilterAndUpdate:
 
             if read2:
                 new_identifier2 = addBarcodesToIdentifier(
-                    read2, umi, cell, umi_separator)
+                    read2, umi, cell, umi_separator, cell_separator)
                 read2.identifier = new_identifier2
                 if self.pattern2:   # seq and quals need to be updated
                     read2.seq = new_seq2

@@ -7,6 +7,22 @@ import collections
 import umi_tools.Utilities as U
 from umi_tools.umi_methods import RANGES
 
+_REVCOMP_TRANSLATION = str.maketrans("ACGTNacgtn", "TGCANtgcan")
+
+
+def reverse_complement(seq):
+    return seq.translate(_REVCOMP_TRANSLATION)[::-1]
+
+
+def reverse_quals(quals):
+    return quals[::-1]
+
+
+class _TempRead(object):
+    def __init__(self, read, seq, quals):
+        self.identifier = read.identifier
+        self.seq = seq
+        self.quals = quals
 
 def addBarcodesToIdentifier(read, UMI, cell, umi_separator, cell_separator=None):
     '''extract the identifier from a read and append the UMI and
@@ -25,6 +41,12 @@ def addBarcodesToIdentifier(read, UMI, cell, umi_separator, cell_separator=None)
     identifier = " ".join(read_id)
 
     return identifier
+
+
+def addOrientationToIdentifier(read, orientation_tag, separator):
+    read_id = read.identifier.split(" ")
+    read_id.append("dir=%s" % orientation_tag)
+    return " ".join(read_id)
 
 
 def extractSeqAndQuals(seq, quals, umi_bases, cell_bases, discard_bases,
@@ -220,18 +242,56 @@ class ExtractFilterAndUpdate:
         ''' '''
         # first check both regexes for paired end samples to avoid uneccessarily
         # extracting barcodes from read1 where regex2 doesn't match read2
+        read1_for_extract = read1
+        read2_for_extract = read2
+        read1_revcomp = False
+        read2_revcomp = False
+        match = None
+        match2 = None
+
         if self.pattern:
             match = self.pattern.match(read1.seq)
-            if not match:
+            if match:
+                self.read_counts['regex matches read1'] += 1
+            elif self.revcomp:
+                rc_seq = reverse_complement(read1.seq)
+                rc_quals = reverse_quals(read1.quals)
+                match = self.pattern.match(rc_seq)
+                if match:
+                    read1_for_extract = _TempRead(read1, rc_seq, rc_quals)
+                    read1_revcomp = True
+                    self.read_counts['regex matches read1 revcomp'] += 1
+                else:
+                    self.read_counts['regex does not match read1'] += 1
+                    if not self.either_read:
+                        return None
+            else:
                 self.read_counts['regex does not match read1'] += 1
                 if not self.either_read:
                     return None
-            else:
-                self.read_counts['regex matches read1'] += 1
 
         if read2 and self.pattern2:
             match2 = self.pattern2.match(read2.seq)
-            if not match2:
+            if match2:
+                self.read_counts['regex matches read2'] += 1
+            elif self.revcomp:
+                rc_seq2 = reverse_complement(read2.seq)
+                rc_quals2 = reverse_quals(read2.quals)
+                match2 = self.pattern2.match(rc_seq2)
+                if match2:
+                    read2_for_extract = _TempRead(read2, rc_seq2, rc_quals2)
+                    read2_revcomp = True
+                    self.read_counts['regex matches read2 revcomp'] += 1
+                else:
+                    self.read_counts['regex does not match read2'] += 1
+                    # if barcodes can be on either read, check if read1
+                    # match also failed
+                    if self.either_read:
+                        if not match:
+                            return None
+                    else:
+                        return None
+            else:
                 self.read_counts['regex does not match read2'] += 1
                 # if barcodes can be on either read, check if read1
                 # match also failed
@@ -240,8 +300,9 @@ class ExtractFilterAndUpdate:
                         return None
                 else:
                     return None
-            else:
-                self.read_counts['regex matches read2'] += 1
+
+        if self.revcomp:
+            self.read_orientation = "RC" if (read1_revcomp or read2_revcomp) else "F"
 
         # now extract barcodes
         if self.either_read:  # extract depending on match and match2
@@ -253,12 +314,12 @@ class ExtractFilterAndUpdate:
             if match:
                 (cell, cell_quals, umi, umi_quals,
                  new_seq, new_quals) = ExtractBarcodes(
-                     read1, match, extract_cell=self.extract_cell,
+                     read1_for_extract, match, extract_cell=self.extract_cell,
                      extract_umi=True, discard=True, retain_umi=self.retain_umi)
             if match2:
                 (cell2, cell_quals2, umi2, umi_quals2,
                  new_seq2, new_quals2) = ExtractBarcodes(
-                     read2, match2, extract_cell=self.extract_cell,
+                     read2_for_extract, match2, extract_cell=self.extract_cell,
                      extract_umi=True, discard=True, retain_umi=self.retain_umi)
 
             if match and match2:
@@ -296,7 +357,7 @@ class ExtractFilterAndUpdate:
                 (cell, cell_quals,
                  umi, umi_quals,
                  new_seq, new_quals) = ExtractBarcodes(
-                     read1, match, extract_cell=self.extract_cell,
+                     read1_for_extract, match, extract_cell=self.extract_cell,
                      extract_umi=True, discard=True, retain_umi=self.retain_umi)
             else:
                 cell, cell_quals, umi, umi_quals, new_seq, new_quals = ("",)*6
@@ -305,7 +366,7 @@ class ExtractFilterAndUpdate:
                 (cell2, cell_quals2,
                  umi2, umi_quals2,
                  new_seq2, new_quals2) = ExtractBarcodes(
-                     read2, match2, extract_cell=self.extract_cell,
+                     read2_for_extract, match2, extract_cell=self.extract_cell,
                      extract_umi=True, discard=True, retain_umi=self.retain_umi)
 
                 cell += cell2
@@ -463,7 +524,8 @@ class ExtractFilterAndUpdate:
                  either_read=False,
                  either_read_resolve="discard",
                  umi_separator="_",
-                 cell_separator=None):
+                 cell_separator=None,
+                 revcomp=False):
 
         self.method = method
         self.read_counts = collections.Counter()
@@ -484,6 +546,8 @@ class ExtractFilterAndUpdate:
         self.umi_whitelist_counts = None  # These will be updated if required
         self.umi_separator = umi_separator
         self.cell_separator = cell_separator
+        self.revcomp = revcomp
+        self.read_orientation = "F"
 
         self.cell_whitelist = None  # These will be updated if required
         self.false_to_true_map = None  # These will be updated if required
@@ -548,6 +612,9 @@ class ExtractFilterAndUpdate:
 
         self.read_counts['Input Reads'] += 1
 
+        if self.revcomp:
+            self.read_orientation = "F"
+
         umi_values = self.getBarcodes(read1, read2)
         if umi_values is None:
             return None
@@ -591,7 +658,13 @@ class ExtractFilterAndUpdate:
 
             new_identifier2 = addBarcodesToIdentifier(
                 read2, umi, cell, umi_separator, cell_separator)
-            read2.identifier = new_identifier
+            read2.identifier = new_identifier2 # UMI added to both reads
+
+            if self.revcomp:
+                read1.identifier = addOrientationToIdentifier(
+                    read1, self.read_orientation, umi_separator)
+                read2.identifier = addOrientationToIdentifier(
+                    read2, self.read_orientation, umi_separator)
 
             # UMI was on read 1
             if new_seq2 == "" and new_quals2 == "":
@@ -608,6 +681,9 @@ class ExtractFilterAndUpdate:
             new_identifier = addBarcodesToIdentifier(
                 read1, umi, cell, umi_separator, cell_separator)
             read1.identifier = new_identifier
+            if self.revcomp:
+                read1.identifier = addOrientationToIdentifier(
+                    read1, self.read_orientation, umi_separator)
             if self.pattern:  # seq and quals need to be updated
                 read1.seq = new_seq
                 read1.quals = new_quals
@@ -616,6 +692,9 @@ class ExtractFilterAndUpdate:
                 new_identifier2 = addBarcodesToIdentifier(
                     read2, umi, cell, umi_separator, cell_separator)
                 read2.identifier = new_identifier2
+                if self.revcomp:
+                    read2.identifier = addOrientationToIdentifier(
+                        read2, self.read_orientation, umi_separator)
                 if self.pattern2:   # seq and quals need to be updated
                     read2.seq = new_seq2
                     read2.quals = new_quals2

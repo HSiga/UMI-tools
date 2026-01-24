@@ -304,7 +304,8 @@ def main(argv=None):
                         either_read_resolve="discard",
                         umi_separator="_",
                         cell_separator=None,
-                        ignore_suffix=False)
+                        ignore_suffix=False,
+                        revcomp=False)
 
     # add common options (-h/--help, ...) and parse command line
 
@@ -402,7 +403,8 @@ def main(argv=None):
         options.either_read,
         options.either_read_resolve,
         options.umi_separator,
-        options.cell_separator)
+        options.cell_separator,
+        options.revcomp)
 
     if options.filter_umi:
         umi_whitelist, false_to_true_map = whitelist_methods.getUserDefinedBarcodes(

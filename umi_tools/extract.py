@@ -135,6 +135,7 @@ from __future__ import absolute_import
 import sys
 import regex
 import collections
+import multiprocessing
 import optparse
 
 # python 3 doesn't require izip
@@ -170,6 +171,87 @@ Usage:
          --log2stderr. Input/Output will be (de)compressed if a
          filename provided to -S/-I/--read2-in/read2-out ends in .gz
          '''
+
+
+_EXTRACT_WORKER = None
+_EXTRACT_FILTERED_OUT = False
+
+
+def _init_extract_worker(config, umi_whitelist, umi_false_to_true_map,
+                         cell_whitelist, cell_false_to_true_map,
+                         cell_blacklist, filtered_out):
+    global _EXTRACT_WORKER, _EXTRACT_FILTERED_OUT
+
+    if config["method"] == "regex":
+        pattern = (regex.compile(config["pattern"])
+                   if config["pattern"] else None)
+        pattern2 = (regex.compile(config["pattern2"])
+                    if config["pattern2"] else None)
+    else:
+        pattern = config["pattern"]
+        pattern2 = config["pattern2"]
+
+    _EXTRACT_WORKER = extract_methods.ExtractFilterAndUpdate(
+        config["method"],
+        pattern,
+        pattern2,
+        config["prime3"],
+        config["extract_cell"],
+        config["quality_encoding"],
+        config["quality_filter_threshold"],
+        config["quality_filter_mask"],
+        config["filter_umi"],
+        config["filter_cell_barcode"],
+        config["retain_umi"],
+        config["either_read"],
+        config["either_read_resolve"],
+        config["umi_separator"])
+
+    _EXTRACT_FILTERED_OUT = filtered_out
+
+    if config["filter_umi"]:
+        _EXTRACT_WORKER.umi_whitelist = umi_whitelist
+        _EXTRACT_WORKER.umi_false_to_true_map = umi_false_to_true_map
+        _EXTRACT_WORKER.umi_whitelist_counts = collections.defaultdict(
+            lambda: collections.Counter())
+
+    if config["filter_cell_barcode"]:
+        _EXTRACT_WORKER.cell_whitelist = cell_whitelist
+        _EXTRACT_WORKER.false_to_true_map = cell_false_to_true_map
+
+    if cell_blacklist:
+        _EXTRACT_WORKER.cell_blacklist = cell_blacklist
+
+
+def _drain_worker_counts():
+    counts = collections.Counter(_EXTRACT_WORKER.getReadCounts())
+    _EXTRACT_WORKER.read_counts = collections.Counter()
+
+    umi_counts = None
+    if _EXTRACT_WORKER.umi_whitelist_counts is not None:
+        umi_counts = {}
+        for umi, cnt in _EXTRACT_WORKER.umi_whitelist_counts.items():
+            umi_counts[umi] = collections.Counter(cnt)
+        _EXTRACT_WORKER.umi_whitelist_counts = collections.defaultdict(
+            lambda: collections.Counter())
+
+    return counts, umi_counts
+
+
+def _process_chunk(records):
+    outputs = []
+    filtered = []
+
+    for read in records:
+        new_read = _EXTRACT_WORKER(read)
+        if new_read:
+            outputs.append(str(new_read))
+        else:
+            if _EXTRACT_FILTERED_OUT:
+                filtered.append(str(read))
+
+    counts, umi_counts = _drain_worker_counts()
+    return outputs, filtered, counts, umi_counts
 
 
 def main(argv=None):
@@ -255,6 +337,10 @@ def main(argv=None):
                      help=("Only extract from the first N reads. If N is "
                            "greater than the number of reads, all reads will "
                            "be used"))
+    group.add_option("-t", "--threads",
+                   dest="threads", type="int",
+                   help=("Number of worker processes to use for single-end "
+                         "extraction [default=%default]"))
     group.add_option("--reconcile-pairs",
                      dest="reconcile", action="store_true",
                      help=("Allow the presences of reads in read2 input that "
@@ -299,7 +385,8 @@ def main(argv=None):
                         either_read=False,
                         either_read_resolve="discard",
                         umi_separator="_",
-                        ignore_suffix=False)
+                        ignore_suffix=False,
+                        threads=1)
 
     # add common options (-h/--help, ...) and parse command line
 
@@ -332,6 +419,9 @@ def main(argv=None):
                     "encoding) to filter UMIs by quality (--quality"
                     "-filter-threshold) or mask low quality bases "
                     "with (--quality-filter-mask)")
+
+    if options.threads < 1:
+        U.error("--threads must be >= 1")
 
     extract_cell, extract_umi = U.validateExtractOptions(options)
 
@@ -436,7 +526,93 @@ def main(argv=None):
     if options.filtered_out:
         filtered_out = U.openFile(options.filtered_out, "w")
 
-    if options.read2_in is None:
+    parallel_single_end = (options.threads > 1 and options.read2_in is None)
+    if options.threads > 1 and options.read2_in is not None:
+        U.error("--threads is only supported for single-end extraction")
+
+    if parallel_single_end:
+        if options.extract_method == "regex":
+            pattern = options.pattern.pattern if options.pattern else None
+            pattern2 = options.pattern2.pattern if options.pattern2 else None
+        else:
+            pattern = options.pattern
+            pattern2 = options.pattern2
+
+        config = {
+            "method": options.extract_method,
+            "pattern": pattern,
+            "pattern2": pattern2,
+            "prime3": options.prime3,
+            "extract_cell": extract_cell,
+            "quality_encoding": options.quality_encoding,
+            "quality_filter_threshold": options.quality_filter_threshold,
+            "quality_filter_mask": options.quality_filter_mask,
+            "filter_umi": options.filter_umi,
+            "filter_cell_barcode": options.filter_cell_barcode,
+            "retain_umi": options.retain_umi,
+            "either_read": options.either_read,
+            "either_read_resolve": options.either_read_resolve,
+            "umi_separator": options.umi_separator
+        }
+
+        total_counts = collections.Counter()
+        total_umi_counts = collections.defaultdict(lambda: collections.Counter())
+
+        def chunk_reads(iterator, chunk_size, reads_subset):
+            prog_count = 0
+            while True:
+                chunk = []
+                while len(chunk) < chunk_size:
+                    if reads_subset and prog_count >= reads_subset:
+                        break
+                    try:
+                        read = next(iterator)
+                    except StopIteration:
+                        break
+                    chunk.append(read)
+                    prog_count += 1
+                    if prog_count % displayMax == 0:
+                        U.info("Parsed {} reads".format(prog_count))
+                if not chunk:
+                    break
+                yield chunk
+                if reads_subset and prog_count >= reads_subset:
+                    break
+
+        pool = multiprocessing.Pool(
+            processes=options.threads,
+            initializer=_init_extract_worker,
+            initargs=(
+                config,
+                (ReadExtractor.umi_whitelist if options.filter_umi else None),
+                (ReadExtractor.umi_false_to_true_map if options.filter_umi else None),
+                (ReadExtractor.cell_whitelist if options.filter_cell_barcode else None),
+                (ReadExtractor.false_to_true_map if options.filter_cell_barcode else None),
+                (ReadExtractor.cell_blacklist if options.blacklist else None),
+                bool(options.filtered_out)))
+
+        try:
+            for outputs, filtered, counts, umi_counts in pool.imap_unordered(
+                    _process_chunk,
+                    chunk_reads(read1s, 10000, options.reads_subset)):
+
+                for out in outputs:
+                    options.stdout.write(out + "\n")
+
+                if options.filtered_out:
+                    for filt in filtered:
+                        filtered_out.write(filt + "\n")
+
+                total_counts.update(counts)
+
+                if umi_counts:
+                    for umi, cnt in umi_counts.items():
+                        total_umi_counts[umi].update(cnt)
+        finally:
+            pool.close()
+            pool.join()
+
+    elif options.read2_in is None:
         for read in read1s:
 
             # incrementing count for monitoring progress
@@ -518,15 +694,24 @@ def main(argv=None):
     if options.filtered_out2:
         filtered_out2.close()
 
-    for k, v in ReadExtractor.getReadCounts().most_common():
-        U.info("%s: %s" % (k, v))
+    if parallel_single_end:
+        for k, v in total_counts.most_common():
+            U.info("%s: %s" % (k, v))
+    else:
+        for k, v in ReadExtractor.getReadCounts().most_common():
+            U.info("%s: %s" % (k, v))
 
     if options.umi_correct_log:
         with U.openFile(options.umi_correct_log, "w") as outf:
             outf.write("umi\tcount_no_errors\tcount_errors\n")
-            for umi, counts in ReadExtractor.umi_whitelist_counts.items():
-                outf.write("%s\t%i\t%i\n" % (
-                    umi, counts["no_error"], counts["error"]))
+            if parallel_single_end:
+                for umi, counts in total_umi_counts.items():
+                    outf.write("%s\t%i\t%i\n" % (
+                        umi, counts["no_error"], counts["error"]))
+            else:
+                for umi, counts in ReadExtractor.umi_whitelist_counts.items():
+                    outf.write("%s\t%i\t%i\n" % (
+                        umi, counts["no_error"], counts["error"]))
         outf.close()
 
     U.Stop()

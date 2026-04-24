@@ -363,7 +363,8 @@ def main(argv=None):
         pattern=options.pattern,
         pattern2=options.pattern2,
         prime3=options.prime3,
-        extract_cell=extract_cell)
+        extract_cell=extract_cell,
+        revcomp=options.revcomp)
 
     cell_barcode_counts = collections.Counter()
 
